@@ -755,6 +755,9 @@ class Block:
         self.body_replay = []
         self.body_reverse = []
 
+        # Custom body used to generate purely forward only code without gfoto if conditionals.
+        self.body_forward_2 = []
+
         # list of vars declared in this block
         self.vars = []
 
@@ -930,6 +933,19 @@ class Adjoint:
 
         adj.args = []
         adj.symbols = {}
+
+        # "Boolean control" variables to emulate/replace gfotos.
+        adj.bc_map = {}
+
+        # BC variables that may need to be added as a conditional statement when processing returns.
+        # - Currently only added inside if statements :\
+        adj.bc_stack_return = list()
+
+        # Update while conditional variables
+        adj.while_cond_stack = list()
+
+        # XXX TODO: Remove
+        adj.is_forward = False
 
         for name, type in adj.arg_types.items():
             # skip return hint
@@ -1210,13 +1226,19 @@ class Adjoint:
                 return f'#line {line} "{normalized_path}"'
         return None
 
-    def add_forward(adj, statement: str, replay: str | None = None, skip_replay: builtins.bool = False) -> None:
+    def add_forward(adj, statement: str, replay: str | None = None, skip_replay: builtins.bool = False, skip_forward_2: builtins.bool = False, skip_forward: builtins.bool = False) -> None:
         """Append a statement to the forward pass."""
 
-        if line_directive := adj.get_line_directive(statement, adj.lineno):
-            adj.blocks[-1].body_forward.append(line_directive)
+        if not skip_forward:
+            if line_directive := adj.get_line_directive(statement, adj.lineno):
+                adj.blocks[-1].body_forward.append(line_directive)
 
-        adj.blocks[-1].body_forward.append(adj.indentation + statement)
+            adj.blocks[-1].body_forward.append(adj.indentation + statement)
+
+        if not skip_forward_2:
+            if line_directive := adj.get_line_directive(statement, adj.lineno):
+                adj.blocks[-1].body_forward_2.append(line_directive)
+            adj.blocks[-1].body_forward_2.append(adj.indentation + statement)
 
         if not skip_replay:
             if line_directive:
@@ -1519,14 +1541,22 @@ class Adjoint:
             # NOTE: If this kernel gets compiled for a CUDA device, then we need
             # to convert the return; into a continue; in codegen_func_forward()
             adj.add_forward("return;", f"goto label{adj.label_count};")
+            # adj.add_forward("return;", f"//gfoto label{adj.label_count};")
         elif len(var) == 1:
             adj.add_forward(f"return {var[0].emit()};", f"goto label{adj.label_count};")
+            # adj.add_forward(f"return {var[0].emit()};", f"//gfoto label{adj.label_count};")
             adj.add_reverse("adj_" + str(var[0]) + " += adj_ret;")
         else:
             for i, v in enumerate(var):
                 adj.add_forward(f"ret_{i} = {v.emit()};")
                 adj.add_reverse(f"adj_{v} += adj_ret_{i};")
             adj.add_forward("return;", f"goto label{adj.label_count};")
+            # adj.add_forward("return;", f"//gfoto label{adj.label_count};")
+
+        bc_var = adj.add_var(bool);
+        adj.bc_map[adj.label_count] = bc_var;
+        adj.bc_stack_return.append(adj.label_count)
+        adj.add_forward(f"{bc_var.emit()} = true;")
 
         adj.add_reverse(f"label{adj.label_count}:;")
 
@@ -1546,6 +1576,27 @@ class Adjoint:
         adj.add_forward("}")
         cond = adj.load(cond)
         adj.add_reverse(f"if ({cond.emit()}) {{")
+
+        # Only handle this for reverse pass
+        # if adj.bc_stack_return and not adj.skip_reverse_codegen:
+        # XXX FW FIXME:: We need to re-introduce bool controls for nested ifs.
+        if adj.bc_stack_return and not adj.is_forward:
+            adj.add_forward("")
+            adj.add_forward("")
+            adj.add_forward(f"// gt for {adj.label_count}")
+
+            adj.add_reverse("")
+            adj.add_reverse("")
+            adj.add_reverse(f"// end gt for {adj.label_count}")
+
+            bc_var = adj.bc_map[adj.bc_stack_return.pop()]
+            # adj.add_forward(f"if (!{bc_var.emit()}) {{", skip_forward_2=True)
+            # adj.add_reverse("}")
+
+            adj.add_forward("")
+            adj.add_forward("")
+            adj.add_reverse("")
+            adj.add_reverse("")
 
     def begin_else(adj, cond):
         cond = adj.load(cond)
@@ -1569,7 +1620,10 @@ class Adjoint:
         adj.indent()
 
         # evaluate cond
-        adj.add_forward(f"if (iter_cmp({iter.emit()}) == 0) goto end_{cond_block.label};")
+        # adj.add_forward(f"if (iter_cmp({iter.emit()}) == 0) goto end_{cond_block.label};")
+
+        adj.add_forward(f"while(iter_cmp({iter.emit()})) {{")
+        adj.indent()
 
         # evaluate iter
         val = adj.add_builtin_call("iter_next", [iter])
@@ -1592,10 +1646,23 @@ class Adjoint:
         for i in body_block.body_forward:
             adj.blocks[-1].body_forward.append(i)
 
-        adj.add_forward(f"goto start_{cond_block.label};", skip_replay=True)
+
+        for i in cond_block.body_forward:
+            adj.blocks[-1].body_forward_2.append(i)
+
+        for i in body_block.body_forward:
+            adj.blocks[-1].body_forward_2.append(i)
+
+
+
+        # adj.add_forward(f"goto start_{cond_block.label};", skip_replay=True)
 
         adj.dedent()
         adj.add_forward(f"end_{cond_block.label}:;", skip_replay=True)
+
+        # XXX: very hacky skip forward here...
+        # adj.add_forward("} // FW end for", skip_forward=True, skip_replay=True)
+        adj.add_forward("} // FW end for", skip_replay=True)
 
         ####################
         # reverse pass
@@ -1624,8 +1691,10 @@ class Adjoint:
         for i in reversed(body_block.body_reverse):
             reverse.append(i)
 
-        reverse.append(adj.indentation + f"\tgoto start_{cond_block.label};")
+        # reverse.append(adj.indentation + f"\tgoto start_{cond_block.label};")
         reverse.append(adj.indentation + f"end_{cond_block.label}:;")
+
+        reverse.append(f"}} // Reverse end for {cond_block.label}")
 
         adj.blocks[-1].body_reverse.extend(reversed(reverse))
 
@@ -1636,11 +1705,19 @@ class Adjoint:
         cond_block = adj.begin_block("while")
         adj.loop_blocks.append(cond_block)
         cond_block.body_forward.append(f"start_{cond_block.label}:;")
+        cond_block.body_forward_2.append(f"start_{cond_block.label}:;")
 
         c = adj.eval(cond)
         c = adj.load(c)
 
-        cond_block.body_forward.append(f"if (({c.emit()}) == false) goto end_{cond_block.label};")
+        # Push condition update code and the variable to update.
+        adj.while_cond_stack.append((cond, c))
+
+        # cond_block.body_forward.append(f"if (({c.emit()}) == false) goto end_{cond_block.label};")
+        # cond_block.body_forward_2.append(f"if (({c.emit()}) == false) goto end_{cond_block.label};")
+
+        cond_block.body_forward.append(f"while ({c.emit()}) {{ // FW start while{cond_block.label}")
+        cond_block.body_forward_2.append(f"while ({c.emit()}) {{ // FW start while{cond_block.label}")
 
         # being block around loop
         adj.begin_block()
@@ -1657,12 +1734,36 @@ class Adjoint:
 
         for i in cond_block.body_forward:
             adj.blocks[-1].body_forward.append(i)
+            adj.blocks[-1].body_forward_2.append(i)
 
         for i in body_block.body_forward:
             adj.blocks[-1].body_forward.append(i)
+            adj.blocks[-1].body_forward_2.append(i)
 
-        adj.blocks[-1].body_forward.append(f"goto start_{cond_block.label};")
-        adj.blocks[-1].body_forward.append(f"end_{cond_block.label}:;")
+        # adj.blocks[-1].body_forward.append(f"goto start_{cond_block.label};")
+        # adj.blocks[-1].body_forward.append(f"end_{cond_block.label}:;")
+        #
+        #
+        # adj.blocks[-1].body_forward_2.append(f"goto start_{cond_block.label};")
+        # adj.blocks[-1].body_forward_2.append(f"end_{cond_block.label}:;")
+
+        before_block_len = len(adj.blocks[-1].body_forward)
+        # print(f"FW body block len before {body_block_len}")
+
+        # Update while condition
+        while_cond, cOriginal = adj.while_cond_stack.pop()
+        c = adj.eval(while_cond)
+        c = adj.load(c)
+        # Break SSA and update the original condition
+        adj.add_forward(f"{cOriginal.emit()} = {c.emit()};")
+
+        after_block_len = len(adj.blocks[-1].body_forward)
+
+        cond_eval_lines = adj.blocks[-1].body_forward[before_block_len:after_block_len]
+        # for line in cond_eval_lines:
+        #     print(type(line), line)
+
+        adj.add_forward(f"}} // FW end while{cond_block.label}", skip_replay=True)
 
         ####################
         # reverse pass
@@ -1684,7 +1785,10 @@ class Adjoint:
         for i in reversed(body_block.body_reverse):
             reverse.append(i)
 
-        reverse.append(f"goto start_{cond_block.label};")
+
+        reverse.extend(cond_eval_lines) 
+        reverse.append(f"}} // Reverse end while {cond_block.label}")
+
         reverse.append(f"end_{cond_block.label}:;")
 
         # output
@@ -2195,12 +2299,14 @@ class Adjoint:
     def emit_Break(adj, node):
         adj.materialize_redefinitions(adj.loop_symbols[-1])
 
-        adj.add_forward(f"goto end_{adj.loop_blocks[-1].label};")
+        # adj.add_forward(f"goto end_{adj.loop_blocks[-1].label};")
+        adj.add_forward(f"break; // FW break{adj.loop_blocks[-1].label}")
 
     def emit_Continue(adj, node):
         adj.materialize_redefinitions(adj.loop_symbols[-1])
 
-        adj.add_forward(f"goto start_{adj.loop_blocks[-1].label};")
+        # adj.add_forward(f"goto start_{adj.loop_blocks[-1].label};")
+        adj.add_forward(f"continue; // FW continue{adj.loop_blocks[-1].label}")
 
     def emit_Expr(adj, node):
         return adj.eval(node.value)
@@ -3616,6 +3722,8 @@ def codegen_struct(struct, device="cpu", indent_size=4):
 
 
 def codegen_func_forward(adj, func_type="kernel", device="cpu"):
+    adj.is_forward = True
+
     if device == "cpu":
         indent = 4
     elif device == "cuda":
@@ -3648,7 +3756,8 @@ def codegen_func_forward(adj, func_type="kernel", device="cpu"):
     lines += ["//---------\n"]
     lines += ["// forward\n"]
 
-    for f in adj.blocks[0].body_forward:
+    # for f in adj.blocks[0].body_forward:
+    for f in adj.blocks[0].body_forward_2:
         if func_type == "kernel" and device == "cuda" and f.lstrip().startswith("return;"):
             # Use of grid-stride loops in CUDA kernels requires that we convert return; to continue;
             lines += [f.replace("return;", "continue;") + "\n"]
@@ -3659,6 +3768,8 @@ def codegen_func_forward(adj, func_type="kernel", device="cpu"):
 
 
 def codegen_func_reverse(adj, func_type="kernel", device="cpu"):
+    adj.is_forward = False
+
     if device == "cpu":
         indent = 4
     elif device == "cuda":
@@ -3681,7 +3792,7 @@ def codegen_func_reverse(adj, func_type="kernel", device="cpu"):
         if is_tile(var.type):
             lines += [f"{var.ctype()} {var.emit()} = {var.type.cinit(requires_grad=True)};\n"]
         elif var.constant is None:
-            lines += [f"{var.ctype()} {var.emit()};\n"]
+            lines += [f"{var.ctype()} {var.emit()} = {{}};\n"]
         else:
             lines += [f"const {var.ctype()} {var.emit()} = {constant_str(var.constant)};\n"]
 
