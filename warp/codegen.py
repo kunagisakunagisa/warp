@@ -1540,18 +1540,18 @@ class Adjoint:
         if var is None or len(var) == 0:
             # NOTE: If this kernel gets compiled for a CUDA device, then we need
             # to convert the return; into a continue; in codegen_func_forward()
-            adj.add_forward("return;", f"goto label{adj.label_count};")
-            # adj.add_forward("return;", f"//gfoto label{adj.label_count};")
+            # adj.add_forward("return;", f"goto label{adj.label_count};")
+            adj.add_forward("return;", f"//gfoto label{adj.label_count};")
         elif len(var) == 1:
-            adj.add_forward(f"return {var[0].emit()};", f"goto label{adj.label_count};")
-            # adj.add_forward(f"return {var[0].emit()};", f"//gfoto label{adj.label_count};")
+            # adj.add_forward(f"return {var[0].emit()};", f"goto label{adj.label_count};")
+            adj.add_forward(f"return {var[0].emit()};", f"//gfoto label{adj.label_count};")
             adj.add_reverse("adj_" + str(var[0]) + " += adj_ret;")
         else:
             for i, v in enumerate(var):
                 adj.add_forward(f"ret_{i} = {v.emit()};")
                 adj.add_reverse(f"adj_{v} += adj_ret_{i};")
-            adj.add_forward("return;", f"goto label{adj.label_count};")
-            # adj.add_forward("return;", f"//gfoto label{adj.label_count};")
+            # adj.add_forward("return;", f"goto label{adj.label_count};")
+            adj.add_forward("return;", f"//gfoto label{adj.label_count};")
 
         bc_var = adj.add_var(bool);
         adj.bc_map[adj.label_count] = bc_var;
@@ -1622,7 +1622,7 @@ class Adjoint:
         # evaluate cond
         # adj.add_forward(f"if (iter_cmp({iter.emit()}) == 0) goto end_{cond_block.label};")
 
-        adj.add_forward(f"while(iter_cmp({iter.emit()})) {{")
+        adj.add_forward(f"while(wp::iter_cmp({iter.emit()})) {{")
         adj.indent()
 
         # evaluate iter
