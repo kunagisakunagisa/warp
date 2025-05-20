@@ -27,6 +27,7 @@ import sys
 import textwrap
 import types
 from typing import Any, Callable, ClassVar, Mapping, Sequence, get_args, get_origin
+from textwrap import indent as twindent
 
 import warp.config
 from warp.types import *
@@ -3389,6 +3390,27 @@ cpu_module_header = """
 
 """
 
+vulkan_module_header = """
+#define WP_TILE_BLOCK_DIM {block_dim}
+#include "slang/builtin_complete.slang"
+
+// avoid namespacing of float type for casting to float type, this is to avoid wp::float(x), which is not valid in C++
+#define float(x) cast_float(x)
+#define adj_float(x, adj_x, adj_ret) adj_cast_float(x, adj_x, adj_ret)
+
+#define int(x) cast_int(x)
+#define adj_int(x, adj_x, adj_ret) adj_cast_int(x, adj_x, adj_ret)
+
+#define builtin_tid1d() wp::tid(task_index, dim)
+#define builtin_tid2d(x, y) wp::tid(x, y, task_index, dim)
+#define builtin_tid3d(x, y, z) wp::tid(x, y, z, task_index, dim)
+#define builtin_tid4d(x, y, z, w) wp::tid(x, y, z, w, task_index, dim)
+
+#define builtin_block_dim() wp::block_dim()
+
+"""
+
+
 cuda_module_header = """
 #define WP_TILE_BLOCK_DIM {block_dim}
 #define WP_NO_CRT
@@ -3508,6 +3530,8 @@ cuda_kernel_template_backward = """
 
 """
 
+# FW: CPU and Vulkan have the same kernel templates.
+
 cpu_kernel_template_forward = """
 
 void {name}_cpu_kernel_forward(
@@ -3576,6 +3600,46 @@ WP_API void {name}_cpu_backward(
 
 """
 
+vulkan_module_template_forward = """
+
+struct ShaderInputs
+{{
+{forward_args}
+}};
+
+[[vk::push_constant]]
+ShaderInputs inputs;
+
+// XXX FW TODO: Properly set invocation counts.
+[shader("compute")]
+[numthreads(32, 1, 1)]
+void {name}_vulkan_forward(uint3 dispatchID : SV_DispatchThreadID)
+{{
+    {name}_cpu_kernel_forward(
+{forward_params});
+}}
+
+"""
+
+vulkan_module_template_backward = """
+
+struct ShaderInputsBackward
+{{
+{reverse_args}
+}};
+
+[[vk::push_constant]]
+ShaderInputsBackward inputsBackward;
+
+[shader("compute")]
+[numthreads(32, 1, 1)]
+void {name}_vulkan_backward(uint3 dispatchID : SV_DispatchThreadID)
+{{
+    {name}_cpu_kernel_backward(
+{reverse_params});
+}}
+
+"""
 
 # converts a constant Python value to equivalent C-repr
 def constant_str(value):
@@ -3724,7 +3788,7 @@ def codegen_struct(struct, device="cpu", indent_size=4):
 def codegen_func_forward(adj, func_type="kernel", device="cpu"):
     adj.is_forward = True
 
-    if device == "cpu":
+    if device == "cpu" or device == "vulkan":
         indent = 4
     elif device == "cuda":
         if func_type == "kernel":
@@ -3770,7 +3834,7 @@ def codegen_func_forward(adj, func_type="kernel", device="cpu"):
 def codegen_func_reverse(adj, func_type="kernel", device="cpu"):
     adj.is_forward = False
 
-    if device == "cpu":
+    if device == "cpu" or device == "vulkan":
         indent = 4
     elif device == "cuda":
         if func_type == "kernel":
@@ -4056,6 +4120,7 @@ def codegen_kernel(kernel, device, options):
         func_line_directive = f"{line_directive}\n"
 
     if device == "cpu":
+        # CPU and Vulkan have the same kernel templates.
         template_forward = cpu_kernel_template_forward
         template_backward = cpu_kernel_template_backward
     elif device == "cuda":
@@ -4179,6 +4244,72 @@ def codegen_module(kernel, device, options):
             }
         )
         template += cpu_module_template_backward
+
+    s = template.format(**template_fmt_args)
+    return s
+
+def codegen_vulkan(kernel, device, options):
+    if device != "cpu":
+        return ""
+
+    # Update the module's options with the ones defined on the kernel, if any.
+    options = dict(options)
+    options.update(kernel.options)
+
+    adj = kernel.adj
+
+    template = ""
+    template_fmt_args = {
+        "name": kernel.get_mangled_name(),
+    }
+
+    # build forward signature
+    push_constant_fields = []
+    forward_params = []
+    for arg in adj.args:
+        field_decl = f"{arg.ctype()} var_{arg.label};"
+        param_access = f"inputs.var_{arg.label}"
+        # if it's a pointer (e.g. wp::array_t), do not dereference
+        if hasattr(arg.type, "_wp_generic_type_str_"):
+            push_constant_fields.append(field_decl)
+            forward_params.append(param_access)
+        else:
+            push_constant_fields.append(field_decl)
+            forward_params.append(param_access)
+    template_fmt_args.update({
+        "forward_args": twindent("\n".join(push_constant_fields), "    "),
+        "forward_params": twindent(",\n".join(forward_params), "        ")
+    })
+    template += vulkan_module_template_forward
+
+    if options["enable_backward"]:
+        reverse_args = []
+        reverse_params = []
+
+        for arg in adj.args:
+            if isinstance(arg.type, indexedarray):
+                _arg = Var(arg.label, array(dtype=arg.type.dtype, ndim=arg.type.ndim))
+                reverse_args.append(f"    { _arg.ctype() } adj_{arg.label };")
+                reverse_params.append(f"        inputsBackward.adj_{arg.label}")
+            elif hasattr(arg.type, "_wp_generic_type_str_"):
+                reverse_args.append(f"    const { arg.ctype() }* adj_{arg.label};")
+                reverse_params.append(f"        *inputsBackward.adj_{arg.label}")
+            else:
+                reverse_args.append(f"    { arg.ctype() } adj_{arg.label };")
+                reverse_params.append(f"        inputsBackward.adj_{arg.label}")
+
+        # Also include forward args if needed (like var_x, var_y, etc.)
+        for arg in adj.args:
+            reverse_args.append(f"    { arg.ctype() } var_{arg.label };")
+            reverse_params.insert(0, f"        inputsBackward.var_{arg.label}")  # insert at beginning to keep order
+
+        # Format full argument list and call params
+        template_fmt_args.update({
+            "reverse_args": "\n".join(reverse_args),
+            "reverse_params": ",\n".join(reverse_params),
+        })
+
+        template += vulkan_module_template_backward
 
     s = template.format(**template_fmt_args)
     return s

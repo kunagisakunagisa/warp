@@ -150,57 +150,57 @@ void compute_probability_distribution_4b3d1eed_cpu_kernel_forward(
 }
 
 
-void sample_mesh_08ea8426_cpu_kernel_forward(
-    wp::launch_bounds_t dim,
-    size_t task_index,
-    wp::uint64 var_mesh,
-    wp::array_t<wp::float32> var_cdf,
-    wp::int32 var_seed,
-    wp::array_t<wp::vec_t<3,wp::float32>> var_out_points)
-{
-    //---------
-    // primal vars
-    wp::int32 var_0;
-    wp::uint32 var_1;
-    wp::float32 var_2;
-    wp::int32 var_3;
-    wp::float32 var_4;
-    wp::float32 var_5;
-    const wp::float32 var_6 = 1.0;
-    wp::float32 var_7;
-    wp::float32 var_8;
-    wp::float32 var_9;
-    const wp::float32 var_10 = 1.0;
-    wp::float32 var_11;
-    wp::float32 var_12;
-    wp::vec_t<3,wp::float32> var_13;
-    //---------
-    // forward
-    // def sample_mesh(                                                                       <L 165>
-    // tid = wp.tid()                                                                         <L 171>
-    var_0 = builtin_tid1d();
-    // rng = wp.rand_init(seed, tid)                                                          <L 173>
-    var_1 = wp::rand_init(var_seed, var_0);
-    // sample = wp.randf(rng)                                                                 <L 176>
-    var_2 = wp::randf(var_1);
-    // tri = wp.lower_bound(cdf, sample)                                                      <L 177>
-    var_3 = wp::lower_bound(var_cdf, var_2);
-    // ru = wp.randf(rng)                                                                     <L 180>
-    var_4 = wp::randf(var_1);
-    // rv = wp.randf(rng)                                                                     <L 181>
-    var_5 = wp::randf(var_1);
-    // tri_u = 1.0 - wp.sqrt(ru)                                                              <L 182>
-    var_7 = wp::sqrt(var_4);
-    var_8 = wp::sub(var_6, var_7);
-    // tri_v = wp.sqrt(ru) * (1.0 - rv)                                                       <L 183>
-    var_9 = wp::sqrt(var_4);
-    var_11 = wp::sub(var_10, var_5);
-    var_12 = wp::mul(var_9, var_11);
-    // pos = wp.mesh_eval_position(mesh, tri, tri_u, tri_v)                                   <L 184>
-    var_13 = wp::mesh_eval_position(var_mesh, var_3, var_8, var_12);
-    // out_points[tid] = pos                                                                  <L 187>
-    wp::array_store(var_out_points, var_0, var_13);
-}
+// void sample_mesh_08ea8426_cpu_kernel_forward(
+//     wp::launch_bounds_t dim,
+//     size_t task_index,
+//     wp::uint64 var_mesh,
+//     wp::array_t<wp::float32> var_cdf,
+//     wp::int32 var_seed,
+//     wp::array_t<wp::vec_t<3,wp::float32>> var_out_points)
+// {
+//     //---------
+//     // primal vars
+//     wp::int32 var_0;
+//     wp::uint32 var_1;
+//     wp::float32 var_2;
+//     wp::int32 var_3;
+//     wp::float32 var_4;
+//     wp::float32 var_5;
+//     const wp::float32 var_6 = 1.0;
+//     wp::float32 var_7;
+//     wp::float32 var_8;
+//     wp::float32 var_9;
+//     const wp::float32 var_10 = 1.0;
+//     wp::float32 var_11;
+//     wp::float32 var_12;
+//     wp::vec_t<3,wp::float32> var_13;
+//     //---------
+//     // forward
+//     // def sample_mesh(                                                                       <L 165>
+//     // tid = wp.tid()                                                                         <L 171>
+//     var_0 = builtin_tid1d();
+//     // rng = wp.rand_init(seed, tid)                                                          <L 173>
+//     var_1 = wp::rand_init(var_seed, var_0);
+//     // sample = wp.randf(rng)                                                                 <L 176>
+//     var_2 = wp::randf(var_1);
+//     // tri = wp.lower_bound(cdf, sample)                                                      <L 177>
+//     var_3 = wp::lower_bound(var_cdf, var_2);
+//     // ru = wp.randf(rng)                                                                     <L 180>
+//     var_4 = wp::randf(var_1);
+//     // rv = wp.randf(rng)                                                                     <L 181>
+//     var_5 = wp::randf(var_1);
+//     // tri_u = 1.0 - wp.sqrt(ru)                                                              <L 182>
+//     var_7 = wp::sqrt(var_4);
+//     var_8 = wp::sub(var_6, var_7);
+//     // tri_v = wp.sqrt(ru) * (1.0 - rv)                                                       <L 183>
+//     var_9 = wp::sqrt(var_4);
+//     var_11 = wp::sub(var_10, var_5);
+//     var_12 = wp::mul(var_9, var_11);
+//     // pos = wp.mesh_eval_position(mesh, tri, tri_u, tri_v)                                   <L 184>
+//     var_13 = wp::mesh_eval_position(var_mesh, var_3, var_8, var_12);
+//     // out_points[tid] = pos                                                                  <L 187>
+//     wp::array_store(var_out_points, var_0, var_13);
+// }
 
 
 // void compute_tri_areas_5da7cd6b_cpu_kernel_forward(

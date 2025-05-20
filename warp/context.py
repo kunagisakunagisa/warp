@@ -1806,10 +1806,10 @@ class ModuleBuilder:
         source = ""
 
         # code-gen LTO forward declarations
-        source += 'extern "C" {\n'
+        # source += 'extern "C" {\n'
         for fwd in self.ltoirs_decl.values():
             source += fwd + "\n"
-        source += "}\n"
+        # source += "}\n"
 
         # code-gen structs
         visited_structs = set()
@@ -1835,14 +1835,24 @@ class ModuleBuilder:
                 )
 
         for kernel in self.kernels:
-            source += warp.codegen.codegen_kernel(kernel, device=device, options=self.options)
-            source += warp.codegen.codegen_module(kernel, device=device, options=self.options)
+            if device == "vulkan":
+                source += warp.codegen.codegen_kernel(kernel, device=device, options=self.options)
+                source += warp.codegen.codegen_vulkan(kernel, device=device, options=self.options)
+            else:
+                source += warp.codegen.codegen_kernel(kernel, device=device, options=self.options)
+                # source += warp.codegen.codegen_module(kernel, device=device, options=self.options)
+                source += warp.codegen.codegen_vulkan(kernel, device=device, options=self.options)
 
         # add headers
         if device == "cpu":
-            source = warp.codegen.cpu_module_header.format(block_dim=self.options["block_dim"]) + source
-        else:
+            # source = warp.codegen.cpu_module_header.format(block_dim=self.options["block_dim"]) + source
+            source = warp.codegen.vulkan_module_header.format(block_dim=self.options["block_dim"]) + source
+        elif device == "cuda":
             source = warp.codegen.cuda_module_header.format(block_dim=self.options["block_dim"]) + source
+        elif device == "vulkan":
+            source = warp.codegen.vulkan_module_header.format(block_dim=self.options["block_dim"]) + source
+        else:
+            source = warp.codegen.vulkan_module_header.format(block_dim=self.options["block_dim"]) + source
 
         return source
 
@@ -5785,6 +5795,7 @@ def launch(
     else:
         device = runtime.get_device(device)
 
+    # XXX FW TODO: determine this for vulkan
     if device == "cpu":
         block_dim = 1
 
@@ -7166,7 +7177,9 @@ def export_builtins(file: io.TextIOBase):  # pragma: no cover
         return get_builtin_type(t).__name__
 
     file.write("namespace wp {\n\n")
-    file.write('extern "C" {\n\n')
+
+    # XXX FW TODO: handle this nicely.
+    # file.write('extern "C" {\n\n')
 
     for k, g in builtin_functions.items():
         if not hasattr(g, "overloads"):
@@ -7222,7 +7235,7 @@ def export_builtins(file: io.TextIOBase):  # pragma: no cover
                 else:
                     file.write(f"WP_API void {f.mangled_name}({return_str}* ret) {{ *ret = wp::{f.key}({params}); }}\n")
 
-    file.write('\n}  // extern "C"\n\n')
+    # file.write('\n}  // extern "C"\n\n')
     file.write("}  // namespace wp\n")
 
 

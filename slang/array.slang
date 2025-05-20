@@ -15,9 +15,9 @@ struct array_t
 {
     T* data;
     T* grad;
-    shape_t shape;
-    int strides[ARRAY_MAX_DIMS];
-    int ndim;
+    // shape_t shape;
+    // int strides[ARRAY_MAX_DIMS];
+    // int ndim;
 }
 
 __generic<T>
@@ -44,6 +44,13 @@ T index(const array_t<T> arr, int i)
 
 __generic<T>
 [ForceInline]
+T* __index_ptr(const array_t<T> arr, int i)
+{
+    return &arr.data[i];
+}
+
+__generic<T>
+[ForceInline]
 T index_grad(const array_t<T> arr, int i)
 {
     return arr.grad[i];
@@ -66,16 +73,24 @@ void adj_array_store(const array_t<T> buf, int i, T value, const array_t<T> adj_
 //
 
 // __generic<T: __BuiltinFloatingPointType>
-[ForceInline]
-float atomic_add(float* buf, float value)
-{
-    return atomicAdd(*buf, value);
-}
+// [ForceInline]
+// float atomic_add(float* buf, float value)
+// {
+//     return atomicAdd(*buf, value);
+// }
 
 // [ForceInline]
 // float atomic_add(const array_t<float> buf, int i, float value) { return atomic_add(&index(buf, i), value); }
 
 [ForceInline]
-float atomic_add(const array_t<float> buf, int i, float value) { return atomic_add(buf.data, value); }
+float atomic_add(const array_t<float> buf, int i, float value) {
+    atomicAdd(buf.data[i], value);
+        // return atomic_add(buf.data, value);
+        // let res = buf.data[i] += value;
+        // return res;
+
+    return 0.0;
+    // return buf.data[i] + value;
+}
 
 }

@@ -446,8 +446,9 @@ inline launch_coord_t launch_coord(size_t linear, const launch_bounds_t bounds)
 [ForceInline]
 int tid(size_t index, const launch_bounds_t bounds)
 {
-    launch_coord_t c = launch_coord(index, bounds);
-    return (int)(c.i);
+    // launch_coord_t c = launch_coord(index, bounds);
+    // return (int)(c.i);
+    return index;
 }
 
 
